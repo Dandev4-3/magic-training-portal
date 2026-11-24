@@ -138,3 +138,4 @@ db.exec(`
 
 export default db;
 export { db };
+export function getDb() { return db; }
