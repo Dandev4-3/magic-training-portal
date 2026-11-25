@@ -1,22 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { client, initDb } from '@/lib/db';
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
+
+export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
   const body = await req.json();
-  const allocationStatus = body.staffId ? 'ALLOCATED' : 'NOT_ALLOCATED';
-  db.prepare(`
-    UPDATE registrations SET staff_id=?, allocation_status=?, course_status=?,
-      start_date=?, planned_end_date=?, completion_date=?, notes=?
-    WHERE id=?
-  `).run(body.staffId || null, allocationStatus, body.courseStatus || 'ACTIVE',
-         body.startDate || null, body.plannedEndDate || null, body.completionDate || null,
-         body.notes || null, id);
-  return NextResponse.json({ success: true });
+  await client.execute({
+    sql: `UPDATE registrations SET course_status=?, allocation_status=?, staff_id=?, start_date=?, planned_end_date=?, notes=? WHERE id=?`,
+    args: [body.courseStatus || 'ACTIVE', body.allocationStatus || 'NOT_ALLOCATED',
+           body.staffId || null, body.startDate || null, body.plannedEndDate || null,
+           body.notes || null, params.id],
+  });
+  const r = await client.execute({ sql: 'SELECT * FROM registrations WHERE id = ?', args: [params.id] });
+  const row = r.rows[0];
+  return NextResponse.json({
+    id: row[0], learner_id: row[1], course_id: row[2], employer_id: row[3],
+    course_status: row[8], allocation_status: row[9],
+  });
 }
 
-export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  db.prepare('DELETE FROM registrations WHERE id = ?').run(id);
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  await client.execute({ sql: 'DELETE FROM registrations WHERE id = ?', args: [params.id] });
   return NextResponse.json({ success: true });
 }
