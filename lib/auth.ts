@@ -15,20 +15,12 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
-
-        // Initialize DB tables + seed admin on first call
-        if (!dbInitialized) {
-          await initDb();
-          dbInitialized = true;
-        }
-
+        if (!dbInitialized) { await initDb(); dbInitialized = true; }
         const result = await client.execute({
           sql: 'SELECT * FROM users WHERE email = ?',
           args: [credentials.email],
         });
-
         if (result.rows.length === 0) return null;
-
         const row = result.rows[0];
         const user = {
           id: row[0] as number,
@@ -37,25 +29,15 @@ export const authOptions: NextAuthOptions = {
           name: row[3] as string,
           role: row[4] as string,
         };
-
         const passwordMatch = bcrypt.compareSync(credentials.password, user.password);
         if (!passwordMatch) return null;
-
-        return {
-          id: String(user.id),
-          email: user.email,
-          name: user.name,
-          role: user.role,
-        };
+        return { id: String(user.id), email: user.email, name: user.name, role: user.role };
       },
     }),
   ],
   callbacks: {
     async jwt({ token, user }) {
-      if (user) {
-        token.role = (user as any).role;
-        token.id = user.id;
-      }
+      if (user) { token.role = (user as any).role; token.id = user.id; }
       return token;
     },
     async session({ session, token }) {
@@ -66,11 +48,7 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  pages: {
-    signIn: '/login',
-  },
-  session: {
-    strategy: 'jwt',
-  },
+  pages: { signIn: '/login' },
+  session: { strategy: 'jwt' },
   secret: process.env.NEXTAUTH_SECRET,
 };
