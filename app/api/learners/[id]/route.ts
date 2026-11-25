@@ -1,48 +1,38 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import db from '@/lib/db'
+import { NextRequest, NextResponse } from 'next/server';
+import { client, initDb } from '@/lib/db';
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
 
-  const learner = db.prepare(`
-    SELECT l.*, e.name as employer_name
-    FROM learners l
-    LEFT JOIN employers e ON l.employer_id = e.id
-    WHERE l.id = ?
-  `).get(id)
-
-  if (!learner) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  return NextResponse.json(learner)
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  const r = await client.execute({ sql: 'SELECT * FROM learners WHERE id = ?', args: [params.id] });
+  if (r.rows.length === 0) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const row = r.rows[0];
+  return NextResponse.json({
+    id: row[0], first_name: row[1], last_name: row[2], email: row[3], phone: row[4],
+    address: row[5], date_of_birth: row[6], employer_id: row[7], notes: row[8],
+  });
 }
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
-
-  const body = await req.json()
-  const { first_name, last_name, email, phone, date_of_birth, address, employer_id, notes } = body
-
-  db.prepare(`
-    UPDATE learners SET
-      first_name = ?, last_name = ?, email = ?, phone = ?,
-      date_of_birth = ?, address = ?, employer_id = ?, notes = ?
-    WHERE id = ?
-  `).run(first_name, last_name, email || null, phone || null,
-         date_of_birth || null, address || null, employer_id || null, notes || null, id)
-
-  return NextResponse.json({ success: true })
+export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  const body = await req.json();
+  await client.execute({
+    sql: `UPDATE learners SET first_name=?, last_name=?, email=?, phone=?, address=?, date_of_birth=?, employer_id=?, notes=? WHERE id=?`,
+    args: [body.firstName, body.lastName, body.email || null, body.phone || null,
+           body.address || null, body.dateOfBirth || null, body.employerId || null, body.notes || null, params.id],
+  });
+  const r = await client.execute({ sql: 'SELECT * FROM learners WHERE id = ?', args: [params.id] });
+  const row = r.rows[0];
+  return NextResponse.json({
+    id: row[0], first_name: row[1], last_name: row[2], email: row[3], phone: row[4],
+    address: row[5], date_of_birth: row[6], employer_id: row[7], notes: row[8],
+  });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
-
-  db.prepare('DELETE FROM learners WHERE id = ?').run(id)
-  return NextResponse.json({ success: true })
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  await client.execute({ sql: 'DELETE FROM learners WHERE id = ?', args: [params.id] });
+  return NextResponse.json({ success: true });
 }
