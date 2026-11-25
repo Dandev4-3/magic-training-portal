@@ -1,45 +1,31 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { client, initDb } from '@/lib/db';
+
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
 
 export async function GET() {
-  try {
-    const totalLearners = (db.prepare('SELECT COUNT(*) as c FROM learners').get() as any).c;
-    const activeCourses = (db.prepare("SELECT COUNT(*) as c FROM registrations WHERE course_status = 'ACTIVE'").get() as any).c;
-    const completedCourses = (db.prepare("SELECT COUNT(*) as c FROM registrations WHERE course_status = 'COMPLETED'").get() as any).c;
-    const unallocated = (db.prepare("SELECT COUNT(*) as c FROM registrations WHERE allocation_status = 'NOT_ALLOCATED' AND course_status = 'ACTIVE'").get() as any).c;
-    const pendingInvoices = (db.prepare("SELECT COUNT(*) as c FROM invoices WHERE status = 'PENDING'").get() as any).c;
-
-    const outstandingResult = db.prepare("SELECT COALESCE(SUM(total - COALESCE(paid,0)),0) as v FROM invoices LEFT JOIN (SELECT invoice_id, SUM(amount) as paid FROM payments GROUP BY invoice_id) p ON invoices.id = p.invoice_id WHERE invoices.status IN ('PENDING','PARTIAL')").get() as any;
-    const outstanding = outstandingResult.v || 0;
-
-    const totalReceived = (db.prepare("SELECT COALESCE(SUM(amount),0) as v FROM payments").get() as any).v || 0;
-
-    const recentRegistrations = db.prepare(`
-      SELECT r.id, l.first_name || ' ' || l.last_name as learner_name, c.name as course_name,
-             r.course_status, r.allocation_status, r.registration_date
-      FROM registrations r
-      JOIN learners l ON r.learner_id = l.id
-      JOIN courses c ON r.course_id = c.id
-      ORDER BY r.created_at DESC LIMIT 10
-    `).all();
-
-    const pendingInvoiceList = db.prepare(`
-      SELECT i.id, i.invoice_no,
-             COALESCE(l.first_name || ' ' || l.last_name, e.name, 'Unknown') as client_name,
-             i.total, i.due_date, i.status
-      FROM invoices i
-      LEFT JOIN learners l ON i.learner_id = l.id
-      LEFT JOIN employers e ON i.employer_id = e.id
-      WHERE i.status IN ('PENDING', 'PARTIAL')
-      ORDER BY i.due_date ASC LIMIT 10
-    `).all();
-
-    return NextResponse.json({
-      stats: { totalLearners, activeCourses, completedCourses, unallocated, pendingInvoices, outstanding, totalReceived },
-      recentRegistrations,
-      pendingInvoices: pendingInvoiceList,
-    });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await ensureDb();
+  const [learners, staff, employers, courses, registrations, activeRegs, invoices, pendingInv, payments] = await Promise.all([
+    client.execute('SELECT COUNT(*) FROM learners'),
+    client.execute('SELECT COUNT(*) FROM staff WHERE is_active = 1'),
+    client.execute('SELECT COUNT(*) FROM employers'),
+    client.execute('SELECT COUNT(*) FROM courses WHERE is_active = 1'),
+    client.execute('SELECT COUNT(*) FROM registrations'),
+    client.execute("SELECT COUNT(*) FROM registrations WHERE course_status = 'ACTIVE'"),
+    client.execute('SELECT COALESCE(SUM(total), 0) FROM invoices'),
+    client.execute("SELECT COALESCE(SUM(total), 0) FROM invoices WHERE status = 'PENDING'"),
+    client.execute('SELECT COALESCE(SUM(amount), 0) FROM payments'),
+  ]);
+  return NextResponse.json({
+    totalLearners: learners.rows[0][0],
+    totalStaff: staff.rows[0][0],
+    totalEmployers: employers.rows[0][0],
+    totalCourses: courses.rows[0][0],
+    totalRegistrations: registrations.rows[0][0],
+    activeRegistrations: activeRegs.rows[0][0],
+    totalInvoiced: invoices.rows[0][0],
+    pendingInvoices: pendingInv.rows[0][0],
+    totalPayments: payments.rows[0][0],
+  });
 }
