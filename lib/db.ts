@@ -77,6 +77,6 @@ export async function initDb() {
   }
 }
 
-export function rowToObj(columns, row) { const obj = {}; columns.forEach((col, i) => { obj[col] = row[i]; }); return obj; }
-export function rowsToObjs(columns, rows) { return rows.map(row => rowToObj(columns, row)); }
+export function rowToObj(columns: string[], row: any[]): Record<string, any> { const obj: Record<string, any> = {}; columns.forEach((col, i) => { obj[col] = row[i]; }); return obj; }
+export function rowsToObjs(columns: string[], rows: any[][]): Record<string, any>[] { return rows.map(row => rowToObj(columns, row)); }
 export default client;
