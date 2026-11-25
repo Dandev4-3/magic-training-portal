@@ -1,22 +1,27 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
+import { NextRequest, NextResponse } from 'next/server';
+import { client, initDb } from '@/lib/db';
 
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
-  const body = await req.json()
-  db.prepare(`UPDATE employers SET name=?, email=?, phone=?, address=?, contact_name=?, notes=? WHERE id=?`)
-    .run(body.name, body.email || null, body.phone || null, body.address || null, body.contact_name || null, body.notes || null, id)
-  return NextResponse.json({ ok: true })
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
+
+export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  const body = await req.json();
+  await client.execute({
+    sql: `UPDATE employers SET name=?, contact=?, email=?, phone=?, address=?, contact_name=?, notes=? WHERE id=?`,
+    args: [body.name, body.contact || null, body.email || null, body.phone || null,
+           body.address || null, body.contactName || null, body.notes || null, params.id],
+  });
+  const r = await client.execute({ sql: 'SELECT * FROM employers WHERE id = ?', args: [params.id] });
+  const row = r.rows[0];
+  return NextResponse.json({
+    id: row[0], name: row[1], contact: row[2], email: row[3], phone: row[4],
+    address: row[5], contact_name: row[6], notes: row[7],
+  });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions)
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { id } = await params
-  db.prepare('DELETE FROM employers WHERE id=?').run(id)
-  return NextResponse.json({ ok: true })
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  await ensureDb();
+  await client.execute({ sql: 'DELETE FROM employers WHERE id = ?', args: [params.id] });
+  return NextResponse.json({ success: true });
 }
