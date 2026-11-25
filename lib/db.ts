@@ -2,139 +2,100 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const dbDir = path.join(process.cwd(), 'data');
-if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
+const isVercel = process.env.VERCEL === '1';
+const dbDir = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
+const dbPath = path.join(dbDir, 'portal.db');
 
-const db = new Database(path.join(dbDir, 'magic.db'));
+if (!isVercel && !fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// Initialize schema
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
-    name TEXT NOT NULL,
     password TEXT NOT NULL,
-    role TEXT DEFAULT 'STAFF',
-    created_at TEXT DEFAULT (datetime('now'))
+    name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'staff',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-
+  CREATE TABLE IF NOT EXISTS employers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    contact_name TEXT,
+    contact_email TEXT,
+    contact_phone TEXT,
+    address TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
   CREATE TABLE IF NOT EXISTS learners (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     first_name TEXT NOT NULL,
     last_name TEXT NOT NULL,
-    email TEXT,
+    email TEXT UNIQUE,
     phone TEXT,
-    address TEXT,
     date_of_birth TEXT,
-    employer_id TEXT,
-    notes TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    employer_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (employer_id) REFERENCES employers(id)
   );
-
-  CREATE TABLE IF NOT EXISTS employers (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    contact TEXT,
-    email TEXT,
-    phone TEXT,
-    address TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS courses (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    category TEXT NOT NULL,
-    duration TEXT,
-    price REAL NOT NULL,
-    price_vat INTEGER DEFAULT 1,
     description TEXT,
-    venue TEXT,
-    is_active INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now'))
+    duration_days INTEGER,
+    price REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-
-  CREATE TABLE IF NOT EXISTS staff (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT,
-    phone TEXT,
-    role TEXT NOT NULL,
-    is_active INTEGER DEFAULT 1,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS registrations (
-    id TEXT PRIMARY KEY,
-    learner_id TEXT NOT NULL,
-    course_id TEXT NOT NULL,
-    employer_id TEXT,
-    staff_id TEXT,
-    registration_date TEXT DEFAULT (datetime('now')),
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    learner_id INTEGER NOT NULL,
+    course_id INTEGER NOT NULL,
     start_date TEXT,
-    planned_end_date TEXT,
-    completion_date TEXT,
-    allocation_status TEXT DEFAULT 'NOT_ALLOCATED',
-    course_status TEXT DEFAULT 'ACTIVE',
+    end_date TEXT,
+    status TEXT DEFAULT 'pending',
     notes TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (learner_id) REFERENCES learners(id),
-    FOREIGN KEY (course_id) REFERENCES courses(id),
-    FOREIGN KEY (employer_id) REFERENCES employers(id),
-    FOREIGN KEY (staff_id) REFERENCES staff(id)
+    FOREIGN KEY (course_id) REFERENCES courses(id)
   );
-
   CREATE TABLE IF NOT EXISTS invoices (
-    id TEXT PRIMARY KEY,
-    invoice_no TEXT UNIQUE NOT NULL,
-    learner_id TEXT,
-    employer_id TEXT,
-    created_by_id TEXT NOT NULL,
-    issue_date TEXT DEFAULT (datetime('now')),
-    due_date TEXT NOT NULL,
-    subtotal REAL NOT NULL,
-    vat_amount REAL NOT NULL,
-    total REAL NOT NULL,
-    status TEXT DEFAULT 'PENDING',
-    notes TEXT,
-    stripe_payment_intent_id TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (learner_id) REFERENCES learners(id),
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    employer_id INTEGER,
+    learner_id INTEGER,
+    registration_id INTEGER,
+    amount REAL NOT NULL,
+    status TEXT DEFAULT 'unpaid',
+    due_date TEXT,
+    paid_date TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (employer_id) REFERENCES employers(id),
-    FOREIGN KEY (created_by_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS invoice_items (
-    id TEXT PRIMARY KEY,
-    invoice_id TEXT NOT NULL,
-    registration_id TEXT,
-    description TEXT NOT NULL,
-    quantity INTEGER DEFAULT 1,
-    unit_price REAL NOT NULL,
-    vat_rate REAL DEFAULT 20,
-    total REAL NOT NULL,
-    FOREIGN KEY (invoice_id) REFERENCES invoices(id),
+    FOREIGN KEY (learner_id) REFERENCES learners(id),
     FOREIGN KEY (registration_id) REFERENCES registrations(id)
   );
-
-  CREATE TABLE IF NOT EXISTS payments (
-    id TEXT PRIMARY KEY,
-    invoice_id TEXT NOT NULL,
-    recorded_by_id TEXT NOT NULL,
-    amount REAL NOT NULL,
-    method TEXT NOT NULL,
-    reference TEXT,
-    ledger TEXT DEFAULT 'BANK',
-    payment_date TEXT DEFAULT (datetime('now')),
-    notes TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (invoice_id) REFERENCES invoices(id),
-    FOREIGN KEY (recorded_by_id) REFERENCES users(id)
-  );
 `);
+
+try {
+  const row = db.prepare('SELECT COUNT(*) as count FROM users').get();
+  if (row.count === 0) {
+    const bcrypt = require('bcryptjs');
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@magic-training.co.uk';
+    const adminPassword = process.env.ADMIN_PASSWORD || 'ChangeMe123!';
+    const adminName = process.env.ADMIN_NAME || 'Admin User';
+    const hashed = bcrypt.hashSync(adminPassword, 10);
+    db.prepare('INSERT INTO users (email, password, name, role) VALUES (?, ?, ?, ?)').run(adminEmail, hashed, adminName, 'admin');
+  }
+} catch (e) { console.error('Auto-seed error:', e); }
 
 export default db;
 export { db };
