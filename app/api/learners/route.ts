@@ -1,44 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { client, initDb } from '@/lib/db';
 import { randomUUID } from 'crypto';
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const search = searchParams.get('search') || '';
-  const page = parseInt(searchParams.get('page') || '1');
-  const limit = 20;
-  const offset = (page - 1) * limit;
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
 
-  const where = search ? `WHERE l.first_name LIKE ? OR l.last_name LIKE ? OR l.email LIKE ? OR l.phone LIKE ?` : '';
-  const params = search ? [`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`] : [];
-
-  const learners = db.prepare(`
-    SELECT l.*, e.name as employer_name,
-           COUNT(r.id) as registration_count
-    FROM learners l
-    LEFT JOIN employers e ON l.employer_id = e.id
-    LEFT JOIN registrations r ON r.learner_id = l.id
-    ${where}
-    GROUP BY l.id
-    ORDER BY l.created_at DESC
-    LIMIT ? OFFSET ?
-  `).all(...params, limit, offset);
-
-  const total = (db.prepare(`SELECT COUNT(*) as c FROM learners l ${where}`).get(...params) as any).c;
-
-  return NextResponse.json({ learners, total, page, pages: Math.ceil(total / limit) });
+export async function GET() {
+  await ensureDb();
+  const res = await client.execute('SELECT * FROM learners ORDER BY last_name, first_name');
+  const learners = res.rows.map(r => ({
+    id: r[0], first_name: r[1], last_name: r[2], email: r[3], phone: r[4],
+    address: r[5], date_of_birth: r[6], employer_id: r[7], notes: r[8], created_at: r[9],
+  }));
+  return NextResponse.json(learners);
 }
 
 export async function POST(req: NextRequest) {
+  await ensureDb();
   const body = await req.json();
   const id = randomUUID();
-
-  db.prepare(`
-    INSERT INTO learners (id, first_name, last_name, email, phone, address, date_of_birth, employer_id, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, body.firstName, body.lastName, body.email || null, body.phone || null,
-         body.address || null, body.dateOfBirth || null, body.employerId || null, body.notes || null);
-
-  const learner = db.prepare('SELECT * FROM learners WHERE id = ?').get(id);
-  return NextResponse.json(learner, { status: 201 });
+  await client.execute({
+    sql: `INSERT INTO learners (id, first_name, last_name, email, phone, address, date_of_birth, employer_id, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [id, body.firstName, body.lastName, body.email || null, body.phone || null,
+           body.address || null, body.dateOfBirth || null, body.employerId || null, body.notes || null],
+  });
+  const r = await client.execute({ sql: 'SELECT * FROM learners WHERE id = ?', args: [id] });
+  const row = r.rows[0];
+  return NextResponse.json({
+    id: row[0], first_name: row[1], last_name: row[2], email: row[3], phone: row[4],
+    address: row[5], date_of_birth: row[6], employer_id: row[7], notes: row[8],
+  }, { status: 201 });
 }
