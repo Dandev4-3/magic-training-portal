@@ -1,68 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { client, initDb } from '@/lib/db';
 import { randomUUID } from 'crypto';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 
-export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+let initialized = false;
+async function ensureDb() { if (!initialized) { await initDb(); initialized = true; } }
 
-  const body = await req.json();
-  const id = randomUUID();
-
-  db.prepare(`
-    INSERT INTO payments (id, invoice_id, recorded_by_id, amount, method, reference, ledger, payment_date, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, body.invoiceId, (session.user as any).id, body.amount, body.method,
-         body.reference || null, body.ledger || 'BANK', body.paymentDate || new Date().toISOString(),
-         body.notes || null);
-
-  const invoice = db.prepare('SELECT total FROM invoices WHERE id = ?').get(body.invoiceId) as any;
-  const totalPaid = (db.prepare('SELECT COALESCE(SUM(amount),0) as v FROM payments WHERE invoice_id = ?').get(body.invoiceId) as any).v;
-
-  if (totalPaid >= invoice.total) {
-    db.prepare("UPDATE invoices SET status = 'PAID' WHERE id = ?").run(body.invoiceId);
-  } else if (totalPaid > 0) {
-    db.prepare("UPDATE invoices SET status = 'PARTIAL' WHERE id = ?").run(body.invoiceId);
-  }
-
-  return NextResponse.json({ id }, { status: 201 });
+export async function GET() {
+  await ensureDb();
+  const res = await client.execute('SELECT * FROM payments ORDER BY created_at DESC');
+  const payments = res.rows.map(r => ({
+    id: r[0], invoice_id: r[1], recorded_by_id: r[2], amount: r[3], method: r[4],
+    reference: r[5], ledger: r[6], payment_date: r[7], notes: r[8], created_at: r[9],
+  }));
+  return NextResponse.json(payments);
 }
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const ledger = searchParams.get('ledger') || '';
-  const from = searchParams.get('from') || '';
-  const to = searchParams.get('to') || '';
-
-  let where = 'WHERE 1=1';
-  const params: any[] = [];
-  if (ledger) { where += ' AND p.ledger = ?'; params.push(ledger); }
-  if (from) { where += ' AND p.payment_date >= ?'; params.push(from); }
-  if (to) { where += ' AND p.payment_date <= ?'; params.push(to); }
-
-  const payments = db.prepare(`
-    SELECT p.*, i.invoice_no,
-           COALESCE(l.first_name || ' ' || l.last_name, e.name) as client_name,
-           u.name as recorded_by_name
-    FROM payments p
-    JOIN invoices i ON p.invoice_id = i.id
-    LEFT JOIN learners l ON i.learner_id = l.id
-    LEFT JOIN employers e ON i.employer_id = e.id
-    JOIN users u ON p.recorded_by_id = u.id
-    ${where}
-    ORDER BY p.payment_date DESC
-  `).all(...params);
-
-  const summary = db.prepare(`
-    SELECT
-      ledger,
-      COALESCE(SUM(amount),0) as total,
-      COUNT(*) as count
-    FROM payments p ${where}
-    GROUP BY ledger
-  `).all(...params);
-
-  return NextResponse.json({ payments, summary });
+export async function POST(req: NextRequest) {
+  await ensureDb();
+  const body = await req.json();
+  const id = randomUUID();
+  await client.execute({
+    sql: `INSERT INTO payments (id, invoice_id, recorded_by_id, amount, method, reference, ledger, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [id, body.invoiceId, body.recordedById || null, body.amount, body.method || 'BANK',
+           body.reference || null, body.ledger || 'BANK', body.notes || null],
+  });
+  await client.execute({
+    sql: `UPDATE invoices SET status='PAID', paid_date=CURRENT_TIMESTAMP WHERE id=?`,
+    args: [body.invoiceId],
+  });
+  return NextResponse.json({ id, success: true }, { status: 201 });
 }
