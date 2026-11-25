@@ -1,9 +1,9 @@
-export const instant = false;
 import { unstable_noStore as noStore } from 'next/cache';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
+
 export default async function PortalLayout({ children }: { children: React.ReactNode }) {
   noStore();
   const session = await getServerSession(authOptions);
